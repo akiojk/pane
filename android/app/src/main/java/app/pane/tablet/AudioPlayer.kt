@@ -21,15 +21,6 @@ internal class AudioPlayer {
 
     private fun ms(frames: Long) = frames * 1000.0 / sampleRate
 
-    /** Packets from the cable usually arrive within 10 to 20 ms of each other, and now and then up to about 35. */
-    private val targetMs = 40.0
-    /** Within this distance of the target, nothing is adjusted. */
-    private val bandMs = 6.0
-    /** Beyond this distance, two frames per packet are adjusted to get back sooner. */
-    private val farMs = 15.0
-    /** Far above the target, as after a burst at startup, whole packets are skipped to catch up quickly. */
-    private val skipAboveMs = 60.0
-
     fun configure(rate: Int, channelCount: Int) {
         release()
         sampleRate = rate
@@ -65,53 +56,32 @@ internal class AudioPlayer {
         val queuedMs = ms(framesWritten - (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL))
         TabletStats.audio(queuedMs, track.underrunCount)
 
+        val plan = AudioClock.plan(queuedMs, playing)
         var data = pcm
-        if (playing) {
-            when {
-                queuedMs > skipAboveMs -> {
-                    TabletStats.audioDropped()
-                    return
-                }
-                queuedMs > targetMs + bandMs -> {
-                    val count = if (queuedMs > targetMs + farMs) 2 else 1
-                    data = adjust(pcm, bytesPerFrame, remove = true, count = count)
-                    TabletStats.audioAdjusted(-count)
-                }
-                queuedMs < targetMs - bandMs -> {
-                    val count = if (queuedMs < targetMs - farMs) 2 else 1
-                    data = adjust(pcm, bytesPerFrame, remove = false, count = count)
-                    TabletStats.audioAdjusted(count)
-                }
+        when (plan) {
+            AudioClock.Plan.Keep -> Unit
+            AudioClock.Plan.Skip -> {
+                TabletStats.audioDropped()
+                return
+            }
+            AudioClock.Plan.RemoveOne, AudioClock.Plan.RemoveTwo -> {
+                val count = if (plan == AudioClock.Plan.RemoveTwo) 2 else 1
+                data = AudioClock.adjust(pcm, bytesPerFrame, remove = true, count = count)
+                TabletStats.audioAdjusted(-count)
+            }
+            AudioClock.Plan.RepeatOne, AudioClock.Plan.RepeatTwo -> {
+                val count = if (plan == AudioClock.Plan.RepeatTwo) 2 else 1
+                data = AudioClock.adjust(pcm, bytesPerFrame, remove = false, count = count)
+                TabletStats.audioAdjusted(count)
             }
         }
 
         val written = track.write(data, 0, data.size, AudioTrack.WRITE_NON_BLOCKING)
         if (written > 0) framesWritten += written / bytesPerFrame
-        if (!playing && ms(framesWritten) >= targetMs) {
+        if (!playing && ms(framesWritten) >= AudioClock.targetMs) {
             track.play()
             playing = true
         }
-    }
-
-    /** Removes or repeats single frames spread evenly through the packet, so no two changes sit together. */
-    private fun adjust(pcm: ByteArray, bytesPerFrame: Int, remove: Boolean, count: Int): ByteArray {
-        val frames = pcm.size / bytesPerFrame
-        if (frames < 4 * count) return pcm
-        val output = java.io.ByteArrayOutputStream(pcm.size + count * bytesPerFrame)
-        val step = frames / (count + 1)
-        var from = 0
-        for (index in 1..count) {
-            val at = index * step * bytesPerFrame
-            if (remove) {
-                output.write(pcm, from, at - from)
-                from = at + bytesPerFrame
-            } else {
-                output.write(pcm, from, at + bytesPerFrame - from)
-                from = at
-            }
-        }
-        output.write(pcm, from, pcm.size - from)
-        return output.toByteArray()
     }
 
     fun release() {

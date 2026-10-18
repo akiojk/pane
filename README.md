@@ -121,6 +121,17 @@ Pane is source-available under the MIT License with the Commons Clause. You may 
 
 The Gradle wrapper scripts, `android/gradlew` and `android/gradlew.bat`, stay under the Apache License 2.0.
 
+## Tests
+
+These check the parser, the Retina choice, touch decisions, and the audio buffer. They do not need the tablet.
+
+```bash
+# Quit Pane first. The Mac check also creates a temporary virtual display.
+mac/dist/Pane.app/Contents/MacOS/Pane --self-test
+
+android/gradlew -p android test
+```
+
 ## Notes for a build agent
 
 Follow **Build a copy** above. Do not invent a second install path.

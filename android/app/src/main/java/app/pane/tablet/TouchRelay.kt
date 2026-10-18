@@ -38,8 +38,6 @@ internal class TouchRelay(
 
     private val handler = Handler(Looper.getMainLooper())
     private val slop = ViewConfiguration.get(view.context).scaledTouchSlop.toFloat()
-    private val holdMillis = 400L
-    private val twoFingerTapMillis = 300L
 
     private var mode = Mode.Idle
     private var fingerId = -1
@@ -101,7 +99,7 @@ internal class TouchRelay(
         mode = Mode.Pending
         emitPointer(Protocol.PHASE_MOVE, Protocol.TOOL_FINGER, fingerId, downX, downY, 0f)
         velocity = VelocityTracker.obtain().also { it.addMovement(event) }
-        handler.postDelayed(hold, holdMillis)
+        handler.postDelayed(hold, GestureRules.holdMillis)
     }
 
     private fun onExtraDown(event: MotionEvent) {
@@ -130,7 +128,7 @@ internal class TouchRelay(
                 if (index < 0) return
                 val x = event.getX(index)
                 val y = event.getY(index)
-                if (hypot(x - downX, y - downY) < slop) return
+                if (!GestureRules.becameScroll(hypot(x - downX, y - downY), slop)) return
                 handler.removeCallbacks(hold)
                 mode = Mode.Scroll
                 scrollBy(x - downX, y - downY, Protocol.SCROLL_BEGAN)
@@ -153,14 +151,17 @@ internal class TouchRelay(
                     TwoFingerKind.Undecided -> {
                         val spreadChange = kotlin.math.abs(spread - startSpan)
                         val travel = hypot(cx - downX, cy - downY)
-                        if (spreadChange < slop && travel < slop) return
-                        if (spreadChange >= travel && startSpan > 1f) {
-                            twoFingerKind = TwoFingerKind.Pinch
-                            pinch(Protocol.SCROLL_BEGAN, spread / startSpan - 1f, cx, cy)
-                            lastSpan = spread
-                        } else {
-                            twoFingerKind = TwoFingerKind.Scroll
-                            scrollBy(cx - downX, cy - downY, Protocol.SCROLL_BEGAN)
+                        when (GestureRules.twoFinger(spreadChange, travel, startSpan, slop)) {
+                            GestureRules.TwoFinger.Undecided -> return
+                            GestureRules.TwoFinger.Pinch -> {
+                                twoFingerKind = TwoFingerKind.Pinch
+                                pinch(Protocol.SCROLL_BEGAN, spread / startSpan - 1f, cx, cy)
+                                lastSpan = spread
+                            }
+                            GestureRules.TwoFinger.Scroll -> {
+                                twoFingerKind = TwoFingerKind.Scroll
+                                scrollBy(cx - downX, cy - downY, Protocol.SCROLL_BEGAN)
+                            }
                         }
                     }
                     TwoFingerKind.Scroll -> scrollBy(cx - lastX, cy - lastY, Protocol.SCROLL_CHANGED)
@@ -192,7 +193,7 @@ internal class TouchRelay(
         when (twoFingerKind) {
             TwoFingerKind.Scroll -> endScroll()
             TwoFingerKind.Pinch -> pinch(Protocol.SCROLL_ENDED, 0f, lastX, lastY)
-            TwoFingerKind.Undecided -> if (SystemClock.uptimeMillis() - twoFingerStart < twoFingerTapMillis) {
+            TwoFingerKind.Undecided -> if (GestureRules.twoFingerTap(SystemClock.uptimeMillis() - twoFingerStart)) {
                 emitPointer(Protocol.PHASE_RIGHT_CLICK, Protocol.TOOL_FINGER, fingerId, downX, downY, 1f)
             }
         }
