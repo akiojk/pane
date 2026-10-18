@@ -1,0 +1,8 @@
+.DS_Store
+mac/.build/
+mac/dist/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
